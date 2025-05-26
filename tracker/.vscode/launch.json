@@ -1,0 +1,19 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug Tracker",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/tracker.py",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Debug Client Test",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/client_test.py",
+      "console": "integratedTerminal"
+    }
+  ]
+} 
