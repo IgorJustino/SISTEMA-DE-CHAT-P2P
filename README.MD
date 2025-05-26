@@ -33,7 +33,7 @@ pip install pynacl
 
 ---
 
-## 🚀 Como Executar
+## Como Executar
 
 ### 1. Iniciar o Tracker
 
@@ -66,7 +66,7 @@ Você verá no terminal as respostas do tracker em formato JSON.
 
 ---
 
-## 📋 Comandos Suportados
+## Comandos Suportados
 
 O tracker entende mensagens JSON via socket TCP na porta 8000. Formato geral:
 
@@ -107,7 +107,7 @@ O tracker entende mensagens JSON via socket TCP na porta 8000. Formato geral:
 
 ---
 
-## 📄 peers.json
+## peers.json
 
 Exemplo de conteúdo de `peers.json` após registro de arquivos:
 
