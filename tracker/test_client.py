@@ -20,7 +20,7 @@ def main():
         print("\n=== Teste REGISTER ===")
         resp = enviar_comando(sock, {
             "cmd": "REGISTER",
-            "user": "igor",
+            "user": "Usuario1",
             "password": "12345"
         })
         print(f"Resposta: {resp}")
@@ -29,7 +29,7 @@ def main():
         print("\n=== Teste LOGIN ===")
         resp = enviar_comando(sock, {
             "cmd": "LOGIN",
-            "user": "igor",
+            "user": "Usuario1",
             "password": "12345"
         })
         print(f"Resposta: {resp}")
@@ -38,7 +38,7 @@ def main():
         print("\n=== Teste REGISTER_FILES ===")
         resp = enviar_comando(sock, {
             "cmd": "REGISTER_FILES",
-            "user": "igor",
+            "user": "Usuario1",
             "files": [
                 {
                     "name": "video.mp4",
@@ -65,7 +65,7 @@ def main():
         print("\n=== Teste LOGOUT ===")
         resp = enviar_comando(sock, {
             "cmd": "LOGOUT",
-            "user": "igor"
+            "user": "Usuario1"
         })
         print(f"Resposta: {resp}")
         

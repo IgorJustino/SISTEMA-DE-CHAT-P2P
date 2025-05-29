@@ -3,6 +3,10 @@ import threading
 import json
 import hashlib
 import datetime
+import time
+
+# Tempo máximo de inatividade em segundos (5 minutos)
+TIMEOUT_SEGUNDOS = 300
 
 def hash_senha(senha: str) -> str:
     return hashlib.sha256(senha.encode()).hexdigest()
@@ -152,6 +156,35 @@ def handle_client(conn, addr):
     conn.close()
     print(f"Conexão fechada com {addr}")
 
+def verificar_peers_inativos():
+    while True:
+        try:
+            peers = carregar_peers()
+            arquivos = carregar_arquivos()
+            tempo_atual = datetime.datetime.now()
+            peers_removidos = []
+
+            # Verifica cada peer
+            for user in list(peers.keys()):
+                ultimo_login = datetime.datetime.fromisoformat(peers[user]['login_time'])
+                if (tempo_atual - ultimo_login).total_seconds() > TIMEOUT_SEGUNDOS:
+                    print(f"Peer {user} removido por inatividade")
+                    del peers[user]
+                    if user in arquivos:
+                        del arquivos[user]
+                    peers_removidos.append(user)
+
+            # Se algum peer foi removido, salva as alterações
+            if peers_removidos:
+                salvar_peers(peers)
+                salvar_arquivos(arquivos)
+
+        except Exception as e:
+            print(f"Erro ao verificar peers inativos: {e}")
+
+        # Espera 60 segundos antes da próxima verificação
+        time.sleep(60)
+
 def main():
     HOST = "0.0.0.0"
     PORT = 8000
@@ -161,6 +194,10 @@ def main():
     server.listen()
     
     print(f"Tracker ouvindo em {HOST}:{PORT}")
+    
+    # Inicia thread de verificação de peers inativos
+    thread_timeout = threading.Thread(target=verificar_peers_inativos, daemon=True)
+    thread_timeout.start()
     
     while True:
         conn, addr = server.accept()
