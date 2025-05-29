@@ -1,15 +1,75 @@
 import socket
 import threading
 import json
-import hashlib
 import datetime
 import time
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives import serialization
+import base64
 
-# Tempo máximo de inatividade em segundos (5 minutos)
+# Tempo máximo de inatividade em segundos (5 min)
 TIMEOUT_SEGUNDOS = 300
 
-def hash_senha(senha: str) -> str:
-    return hashlib.sha256(senha.encode()).hexdigest()
+# Gerar par de chaves RSA se não existir
+def gerar_chaves_rsa():
+    try:
+        with open("private_key.pem", "rb") as f:
+            private_key = serialization.load_pem_private_key(f.read(), password=None)
+        with open("public_key.pem", "rb") as f:
+            public_key = serialization.load_pem_public_key(f.read())
+    except FileNotFoundError:
+        # Gerar novo par de chaves
+        private_key = rsa.generate_private_key(
+            public_exponent=65537,
+            key_size=2048
+        )
+        public_key = private_key.public_key()
+        
+        # Salvar chaves
+        with open("private_key.pem", "wb") as f:
+            f.write(private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption()
+            ))
+        
+        with open("public_key.pem", "wb") as f:
+            f.write(public_key.public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo
+            ))
+    
+    return private_key, public_key
+
+# Criptografar senha usando RSA
+def criptografar_senha(senha: str, public_key) -> str:
+    senha_bytes = senha.encode()
+    ciphertext = public_key.encrypt(
+        senha_bytes,
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None
+        )
+    )
+    return base64.b64encode(ciphertext).decode()
+
+# Descriptografar senha usando RSA
+def descriptografar_senha(senha_criptografada: str, private_key) -> str:
+    try:
+        ciphertext = base64.b64decode(senha_criptografada)
+        plaintext = private_key.decrypt(
+            ciphertext,
+            padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None
+            )
+        )
+        return plaintext.decode()
+    except:
+        return None
 
 def carregar_usuarios():
     try:
@@ -46,19 +106,17 @@ def salvar_arquivos(arquivos):
 
 def handle_client(conn, addr):
     print(f"Nova conexão de {addr}")
+    private_key, public_key = gerar_chaves_rsa()
     
     while True:
         try:
-            # Recebe dados do cliente
             data = conn.recv(4096)
             if not data:
                 break
                 
-            # Decodifica o JSON recebido
             msg = json.loads(data.decode())
             cmd = msg.get("cmd")
             
-            # Processa o comando
             if cmd == "REGISTER":
                 usuarios = carregar_usuarios()
                 user = msg.get("user")
@@ -67,7 +125,9 @@ def handle_client(conn, addr):
                 if user in usuarios:
                     response = {"status": "ERROR", "msg": "Usuário já existe"}
                 else:
-                    usuarios[user] = hash_senha(password)
+                    # Criptografa a senha antes de salvar
+                    senha_criptografada = criptografar_senha(password, public_key)
+                    usuarios[user] = senha_criptografada
                     salvar_usuarios(usuarios)
                     response = {"status": "OK", "msg": "Usuário registrado com sucesso"}
 
@@ -76,21 +136,26 @@ def handle_client(conn, addr):
                 user = msg.get("user")
                 password = msg.get("password")
                 
-                if user in usuarios and usuarios[user] == hash_senha(password):
-                    # Login bem sucedido
-                    peers = carregar_peers()
-                    client_ip, client_port = conn.getpeername()
+                if user in usuarios:
+                    senha_armazenada = usuarios[user]
+                    senha_descriptografada = descriptografar_senha(senha_armazenada, private_key)
                     
-                    peers[user] = {
-                        "ip": client_ip,
-                        "porta": client_port,
-                        "login_time": datetime.datetime.now().isoformat()
-                    }
-                    
-                    salvar_peers(peers)
-                    response = {"status": "OK", "msg": "Login bem-sucedido!"}
+                    if senha_descriptografada == password:
+                        peers = carregar_peers()
+                        client_ip, client_port = conn.getpeername()
+                        
+                        peers[user] = {
+                            "ip": client_ip,
+                            "porta": client_port,
+                            "login_time": datetime.datetime.now().isoformat()
+                        }
+                        
+                        salvar_peers(peers)
+                        response = {"status": "OK", "msg": "Login bem-sucedido!"}
+                    else:
+                        response = {"status": "ERROR", "msg": "Senha incorreta"}
                 else:
-                    response = {"status": "ERROR", "msg": "Credenciais inválidas"}
+                    response = {"status": "ERROR", "msg": "Usuário não encontrado"}
 
             elif cmd == "REGISTER_FILES":
                 user = msg.get("user")
