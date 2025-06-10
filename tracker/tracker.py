@@ -7,6 +7,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import serialization
 import base64
+import os
 
 # Tempo máximo de inatividade em segundos (5 min)
 TIMEOUT_SEGUNDOS = 300
@@ -71,38 +72,53 @@ def descriptografar_senha(senha_criptografada: str, private_key) -> str:
     except:
         return None
 
+DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
+
+# Funções de acesso aos arquivos de dados
+
 def carregar_usuarios():
     try:
-        with open("users.json", "r") as f:
+        with open(os.path.join(DATA_DIR, "users.json"), "r") as f:
             return json.load(f)
     except FileNotFoundError:
         return {}
 
 def salvar_usuarios(usuarios):
-    with open("users.json", "w") as f:
+    with open(os.path.join(DATA_DIR, "users.json"), "w") as f:
         json.dump(usuarios, f, indent=2)
 
 def carregar_peers():
     try:
-        with open("peers.json", "r") as f:
+        with open(os.path.join(DATA_DIR, "peers.json"), "r") as f:
             return json.load(f)
     except FileNotFoundError:
         return {}
 
 def salvar_peers(peers):
-    with open("peers.json", "w") as f:
+    with open(os.path.join(DATA_DIR, "peers.json"), "w") as f:
         json.dump(peers, f, indent=2)
 
 def carregar_arquivos():
     try:
-        with open("files.json", "r") as f:
+        with open(os.path.join(DATA_DIR, "files.json"), "r") as f:
             return json.load(f)
     except FileNotFoundError:
         return {}
 
 def salvar_arquivos(arquivos):
-    with open("files.json", "w") as f:
+    with open(os.path.join(DATA_DIR, "files.json"), "w") as f:
         json.dump(arquivos, f, indent=2)
+
+def carregar_salas():
+    try:
+        with open(os.path.join(DATA_DIR, "rooms.json"), "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+def salvar_salas(salas):
+    with open(os.path.join(DATA_DIR, "rooms.json"), "w") as f:
+        json.dump(salas, f, indent=2)
 
 def handle_client(conn, addr):
     print(f"Nova conexão de {addr}")
@@ -135,22 +151,21 @@ def handle_client(conn, addr):
                 usuarios = carregar_usuarios()
                 user = msg.get("user")
                 password = msg.get("password")
-                
+                porta = msg.get("porta")
                 if user in usuarios:
                     senha_armazenada = usuarios[user]
                     senha_descriptografada = descriptografar_senha(senha_armazenada, private_key)
-                    
                     if senha_descriptografada == password:
                         peers = carregar_peers()
-                        client_ip, client_port = conn.getpeername()
-                        
+                        client_ip, _ = conn.getpeername()
+                        print(f"Registrando peer: {user} IP: {client_ip} Porta: {porta}")
                         peers[user] = {
                             "ip": client_ip,
-                            "porta": client_port,
+                            "porta": porta,
                             "login_time": datetime.datetime.now().isoformat()
                         }
-                        
                         salvar_peers(peers)
+                        print("Peers salvos:", peers)
                         response = {"status": "OK", "msg": "Login bem-sucedido!"}
                     else:
                         response = {"status": "ERROR", "msg": "Senha incorreta"}
@@ -205,6 +220,77 @@ def handle_client(conn, addr):
                 else:
                     response = {"status": "ERROR", "msg": "Usuário não está logado"}
                 
+            elif cmd == "CREATE_ROOM":
+                nome_sala = msg.get("room")
+                user = msg.get("user")
+                senha = msg.get("senha")
+                salas = carregar_salas()
+                if nome_sala in salas:
+                    response = {"status": "ERROR", "msg": "Sala já existe"}
+                else:
+                    salas[nome_sala] = {"members": [user], "admin": user, "senha": senha}
+                    salvar_salas(salas)
+                    response = {
+                        "status": "OK",
+                        "msg": f"Sala '{nome_sala}' criada e usuário adicionado",
+                        "members": salas[nome_sala]["members"]
+                    }
+
+            elif cmd == "JOIN_ROOM":
+                nome_sala = msg.get("room")
+                user = msg.get("user")
+                senha = msg.get("senha")
+                salas = carregar_salas()
+                if nome_sala not in salas:
+                    response = {"status": "ERROR", "msg": "Sala não existe"}
+                elif salas[nome_sala]["senha"] != senha:
+                    response = {"status": "ERROR", "msg": "Senha incorreta para a sala."}
+                else:
+                    if user not in salas[nome_sala]["members"]:
+                        salas[nome_sala]["members"].append(user)
+                        salvar_salas(salas)
+                    response = {"status": "OK", "msg": f"Usuário '{user}' entrou na sala '{nome_sala}'"}
+
+            elif cmd == "LIST_ROOMS":
+                salas = carregar_salas()
+                response = {"status": "OK", "rooms": list(salas.keys())}
+                
+            elif cmd == "KICK_MEMBER":
+                nome_sala = msg.get("room")
+                admin = msg.get("admin")
+                membro = msg.get("member")
+                salas = carregar_salas()
+                if nome_sala not in salas:
+                    response = {"status": "ERROR", "msg": "Sala não existe"}
+                elif salas[nome_sala].get("admin") != admin:
+                    response = {"status": "ERROR", "msg": "Apenas o administrador pode expulsar membros."}
+                elif membro not in salas[nome_sala]["members"]:
+                    response = {"status": "ERROR", "msg": "Usuário não está na sala."}
+                elif membro == admin:
+                    response = {"status": "ERROR", "msg": "O administrador não pode se expulsar."}
+                else:
+                    salas[nome_sala]["members"].remove(membro)
+                    salvar_salas(salas)
+                    response = {"status": "OK", "msg": f"Usuário '{membro}' foi expulso da sala '{nome_sala}'"}
+
+            elif cmd == "HEARTBEAT":
+                user = msg.get("user")
+                peers = carregar_peers()
+                if user in peers:
+                    peers[user]["login_time"] = datetime.datetime.now().isoformat()
+                    salvar_peers(peers)
+                    response = {"status": "OK", "msg": "Heartbeat recebido"}
+                else:
+                    response = {"status": "ERROR", "msg": "Usuário não está logado"}
+
+            elif cmd == "GET_ROOM_MEMBERS":
+                nome_sala = msg.get("room")
+                salas = carregar_salas()
+                if nome_sala in salas:
+                    response = {"status": "OK", "members": salas[nome_sala]["members"]}
+                else:
+                    response = {"status": "ERROR", "msg": "Sala não existe"}
+
             else:
                 response = {"status": "ERROR", "msg": "Comando inválido"}
             

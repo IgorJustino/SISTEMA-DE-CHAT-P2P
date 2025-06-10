@@ -1,0 +1,41 @@
+{
+  "sala1": {
+    "members": [
+      "amanda",
+      "bob",
+      "leticia",
+      "zeca",
+      "nick"
+    ],
+    "admin": "amanda",
+    "senha": "sala1"
+  },
+  "zeca": {
+    "members": [
+      "zeca"
+    ],
+    "admin": "zeca",
+    "senha": "zeca"
+  },
+  "123": {
+    "members": [
+      "zeca"
+    ],
+    "admin": "zeca",
+    "senha": "123"
+  },
+  "1234": {
+    "members": [
+      "zeca"
+    ],
+    "admin": "zeca",
+    "senha": "1234"
+  },
+  "12": {
+    "members": [
+      "zeca"
+    ],
+    "admin": "zeca",
+    "senha": "12"
+  }
+}
