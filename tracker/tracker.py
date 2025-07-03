@@ -341,19 +341,40 @@ def main():
     PORT = 8000
     
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.bind((HOST, PORT))
-    server.listen()
     
-    print(f"Tracker ouvindo em {HOST}:{PORT}")
+    # Permite reutilizar a porta mesmo se ela não foi liberada completamente
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     
-    # Inicia thread de verificação de peers inativos
-    thread_timeout = threading.Thread(target=verificar_peers_inativos, daemon=True)
-    thread_timeout.start()
-    
-    while True:
-        conn, addr = server.accept()
-        thread = threading.Thread(target=handle_client, args=(conn, addr), daemon=True)
-        thread.start()
+    try:
+        server.bind((HOST, PORT))
+        server.listen()
+        
+        print(f"Tracker ouvindo em {HOST}:{PORT}")
+        
+        # Inicia thread de verificação de peers inativos
+        thread_timeout = threading.Thread(target=verificar_peers_inativos, daemon=True)
+        thread_timeout.start()
+        
+        while True:
+            conn, addr = server.accept()
+            thread = threading.Thread(target=handle_client, args=(conn, addr), daemon=True)
+            thread.start()
+            
+    except OSError as e:
+        if e.errno == 98:  # Address already in use
+            print(f"ERRO: A porta {PORT} já está em uso!")
+            print("Soluções:")
+            print("1. Mate o processo que está usando a porta:")
+            print(f"   sudo lsof -ti:{PORT} | xargs kill -9")
+            print("2. Use uma porta diferente modificando PORT no código")
+            print("3. Aguarde alguns segundos e tente novamente")
+        else:
+            print(f"Erro ao iniciar o servidor: {e}")
+    except KeyboardInterrupt:
+        print("\nServidor interrompido pelo usuário")
+    finally:
+        server.close()
+        print("Servidor finalizado")
 
 if __name__ == "__main__":
     main() 
