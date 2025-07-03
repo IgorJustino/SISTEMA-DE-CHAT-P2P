@@ -107,7 +107,21 @@ def handle_peer_conn(conn, addr, private_key, public_key):
                 break
             mensagem_cifrada = data.decode()
             mensagem = descriptografar_mensagem(mensagem_cifrada, private_key)
-            print(f"[MENSAGEM DE {addr}]: {mensagem}")
+            
+            # Identifica o tipo de mensagem
+            if mensagem.startswith("[PRIVADA]"):
+                mensagem_limpa = mensagem[10:]  # Remove "[PRIVADA] "
+                print(f"[MENSAGEM PRIVADA DE {addr}]: {mensagem_limpa}")
+            elif mensagem.startswith("[") and "]" in mensagem:
+                # Mensagem de sala
+                sala_nome = mensagem[1:mensagem.index("]")]
+                print(f"[MENSAGEM DE GRUPO {addr}]: {mensagem}")
+                if sala_nome not in historico_salas:
+                    historico_salas[sala_nome] = []
+                historico_salas[sala_nome].append(mensagem)
+            else:
+                # Mensagem sem formato específico
+                print(f"[MENSAGEM DE {addr}]: {mensagem}")
             # Salva no histórico se for mensagem de sala
             if mensagem.startswith("[") and "]" in mensagem:
                 sala_nome = mensagem[1:mensagem.index("]")]
@@ -120,16 +134,35 @@ def handle_peer_conn(conn, addr, private_key, public_key):
         conn.close()
 
 # Função para conectar a outro peer e enviar mensagem cifrada
-def conectar_e_enviar(ip, porta, minha_public_key, mensagem, peer_public_key):
+def conectar_e_enviar(ip, porta, minha_private_key, mensagem, destinatario_user, eh_mensagem_privada=False):
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         sock.connect((ip, porta))
+        
+        # Recebe chave pública do peer (para validação)
         peer_pub_pem = sock.recv(4096).decode()
+        peer_public_key_real = pem_to_public_key(peer_pub_pem)
+        
+        # Envia nossa chave pública
+        minha_public_key = minha_private_key.public_key()
         sock.sendall(public_key_to_pem(minha_public_key).encode())
-        mensagem_cifrada = criptografar_mensagem(mensagem, peer_public_key)
+        
+        # Adiciona prefixo para identificar tipo de mensagem
+        if eh_mensagem_privada:
+            mensagem_com_prefixo = f"[PRIVADA] {mensagem}"
+            print(f"[CRIPTOGRAFIA] Criptografando mensagem privada com chave pública de {destinatario_user}")
+        else:
+            mensagem_com_prefixo = mensagem
+            print(f"[CRIPTOGRAFIA] Criptografando mensagem de grupo com chave pública do destinatário")
+            
+        # AQUI ESTÁ O CORRETO: Criptografa com chave PÚBLICA do destinatário
+        mensagem_cifrada = criptografar_mensagem(mensagem_com_prefixo, peer_public_key_real)
         sock.sendall(mensagem_cifrada.encode())
+        
     except ConnectionRefusedError:
         print(f"[ERRO] Não foi possível conectar ao peer {ip}:{porta}. Peer offline?")
+    except Exception as e:
+        print(f"[ERRO] Erro ao enviar mensagem: {e}")
     finally:
         sock.close()
 
@@ -138,6 +171,67 @@ salas = {}  # sala_nome: [user1, user2, ...]
 
 # Adicionar estrutura para histórico de mensagens
 historico_salas = {}
+
+# Funções auxiliares para gerenciamento de salas
+def obter_membros_sala(tracker_sock, nome_sala):
+    resp = enviar_comando_tracker(tracker_sock, {"cmd": "GET_ROOM_MEMBERS", "room": nome_sala})
+    if resp.get("status") == "OK":
+        return resp.get("members", [])
+    return []
+
+def usuario_esta_na_sala(tracker_sock, user, nome_sala):
+    membros = obter_membros_sala(tracker_sock, nome_sala)
+    return user in membros
+
+def usuario_tem_salas_ativas(tracker_sock, user):
+    """Verifica se o usuário está em alguma sala ativa"""
+    try:
+        resp_salas = listar_salas(tracker_sock)
+        salas_disponiveis = resp_salas.get("rooms", [])
+        
+        for sala in salas_disponiveis:
+            membros = obter_membros_sala(tracker_sock, sala)
+            if user in membros:
+                return True
+        return False
+    except:
+        return False
+
+def enviar_mensagem_grupo(tracker_sock, peers, user, private_key, public_key, nome_sala, mensagem):
+    # Checa se o usuário ainda está na sala
+    if not usuario_esta_na_sala(tracker_sock, user, nome_sala):
+        print("Você foi expulso da sala!")
+        return
+    
+    # Adiciona a mensagem ao próprio histórico local e mostra para o usuário
+    mensagem_formatada = f"[{nome_sala}] {user}: {mensagem}"
+    if nome_sala not in historico_salas:
+        historico_salas[nome_sala] = []
+    historico_salas[nome_sala].append(mensagem_formatada)
+    print(f"[MENSAGEM ENVIADA NO GRUPO]: {mensagem_formatada}")
+    
+    membros = obter_membros_sala(tracker_sock, nome_sala)
+    
+    mensagens_enviadas = 0
+    for membro in membros:
+        if membro == user:
+            continue
+        if membro in peers:
+            ip = peers[membro]['connection']['ip']
+            porta = peers[membro]['connection']['porta']
+            conectar_e_enviar(ip, porta, private_key, mensagem_formatada, membro, eh_mensagem_privada=False)
+            mensagens_enviadas += 1
+        else:
+            print(f"[AVISO] Membro {membro} não está conectado no momento")
+    
+    if mensagens_enviadas == 0:
+        print("[AVISO] Nenhum membro online para receber a mensagem")
+    else:
+        print(f"[INFO] Mensagem enviada para {mensagens_enviadas} membro(s)")
+
+def expulsar_membro(tracker_sock, admin, nome_sala, membro):
+    comando = {"cmd": "KICK_MEMBER", "room": nome_sala, "admin": admin, "member": membro}
+    return enviar_comando_tracker(tracker_sock, comando)
 
 # Função principal
 def main():
@@ -171,7 +265,18 @@ def main():
     threading.Thread(target=enviar_heartbeat, args=(tracker_sock, user), daemon=True).start()
 
     while True:
-        print("\n1 - Listar peers\n2 - Enviar mensagem cifrada\n3 - Criar sala\n4 - Entrar em sala\n5 - Listar salas\n6 - Enviar mensagem em grupo\n7 - Logout/Sair")
+        # Verifica se o usuário ainda tem salas ativas
+        usuario_tem_salas = usuario_tem_salas_ativas(tracker_sock, user)
+        
+        print("\n1 - Listar peers\n2 - Enviar mensagem privada\n3 - Criar sala\n4 - Entrar em sala\n5 - Listar salas")
+        
+        # Só mostra opção de enviar mensagem em grupo se o usuário estiver em alguma sala
+        if usuario_tem_salas:
+            print("6 - Enviar mensagem em grupo")
+            print("7 - Logout/Sair")
+        else:
+            print("6 - Logout/Sair")
+            
         opcao = input("Escolha uma opção: ")
         if opcao == "1":
             peers = obter_peers(tracker_sock)
@@ -195,8 +300,9 @@ def main():
             peer_user = peer_list[idx]
             ip = peers[peer_user]['connection']['ip']
             porta = peers[peer_user]['connection']['porta']
-            mensagem = input("Digite a mensagem: ")
-            conectar_e_enviar(ip, porta, public_key, mensagem, public_key)  # Aqui, idealmente, usar a chave pública do peer
+            mensagem = input("Digite a mensagem privada: ")
+            print(f"[ENVIANDO MENSAGEM PRIVADA PARA {peer_user}]")
+            conectar_e_enviar(ip, porta, private_key, mensagem, peer_user, eh_mensagem_privada=True)
         elif opcao == "3":
             nome_sala = input("Nome da sala: ")
             resp = criar_sala(tracker_sock, user, nome_sala)
@@ -215,16 +321,31 @@ def main():
             resp = listar_salas(tracker_sock)
             print("Salas disponíveis:", resp.get("rooms", []))
         elif opcao == "6":
-            nome_sala = input("Nome da sala: ")
-            peers = obter_peers(tracker_sock)
-            mensagem = input("Digite a mensagem para o grupo: ")
-            enviar_mensagem_grupo(tracker_sock, peers, user, private_key, public_key, nome_sala, mensagem)
+            if usuario_tem_salas:
+                # Usuário está em alguma sala - pode enviar mensagem em grupo
+                nome_sala = input("Nome da sala: ")
+                # Verifica se o usuário realmente está nesta sala específica
+                if not usuario_esta_na_sala(tracker_sock, user, nome_sala):
+                    print(f"Você não está na sala '{nome_sala}' ou foi expulso!")
+                    continue
+                peers = obter_peers(tracker_sock)
+                mensagem = input("Digite a mensagem para o grupo: ")
+                enviar_mensagem_grupo(tracker_sock, peers, user, private_key, public_key, nome_sala, mensagem)
+            else:
+                # Usuário não está em nenhuma sala - logout
+                resp = enviar_comando_tracker(tracker_sock, {"cmd": "LOGOUT", "user": user})
+                print(resp.get("msg"))
+                print("Saindo...")
+                break
         elif opcao == "7":
-            # Envia logout ao tracker e encerra
-            resp = enviar_comando_tracker(tracker_sock, {"cmd": "LOGOUT", "user": user})
-            print(resp.get("msg"))
-            print("Saindo...")
-            break
+            if usuario_tem_salas:
+                # Logout quando usuário tem salas
+                resp = enviar_comando_tracker(tracker_sock, {"cmd": "LOGOUT", "user": user})
+                print(resp.get("msg"))
+                print("Saindo...")
+                break
+            else:
+                print("Opção inválida!")
         else:
             print("Opção inválida!")
 
@@ -242,29 +363,13 @@ def listar_salas(tracker_sock):
     comando = {"cmd": "LIST_ROOMS"}
     return enviar_comando_tracker(tracker_sock, comando)
 
-def obter_membros_sala(tracker_sock, nome_sala):
-    resp = enviar_comando_tracker(tracker_sock, {"cmd": "GET_ROOM_MEMBERS", "room": nome_sala})
-    if resp.get("status") == "OK":
-        return resp.get("members", [])
-    return []
-
-def usuario_esta_na_sala(tracker_sock, user, nome_sala):
-    membros = obter_membros_sala(tracker_sock, nome_sala)
-    return user in membros
-
-def enviar_mensagem_grupo(tracker_sock, peers, user, private_key, public_key, nome_sala, mensagem):
-    # Checa se o usuário ainda está na sala
-    if not usuario_esta_na_sala(tracker_sock, user, nome_sala):
-        print("Você foi expulso da sala!")
-        return
-    membros = obter_membros_sala(tracker_sock, nome_sala)
-    for membro in membros:
-        if membro == user:
-            continue
-        if membro in peers:
-            ip = peers[membro]['connection']['ip']
-            porta = peers[membro]['connection']['porta']
-            conectar_e_enviar(ip, porta, public_key, f"[{nome_sala}] {user}: {mensagem}", public_key)  # Aqui, idealmente, usar a chave pública do peer
+def enviar_heartbeat(tracker_sock, user):
+    while True:
+        try:
+            enviar_comando_tracker(tracker_sock, {"cmd": "HEARTBEAT", "user": user})
+        except Exception as e:
+            print(f"[HEARTBEAT] Erro ao enviar heartbeat: {e}")
+        time.sleep(60)
 
 def menu_sala(tracker_sock, peers, user, private_key, public_key, nome_sala):
     print(f"\n=== Você está na sala '{nome_sala}' ===")
@@ -291,7 +396,9 @@ def menu_sala(tracker_sock, peers, user, private_key, public_key, nome_sala):
                 print("Você foi expulso da sala!")
                 break
             mensagem = input("Digite a mensagem para o grupo: ")
-            enviar_mensagem_grupo(tracker_sock, peers, user, private_key, public_key, nome_sala, mensagem)
+            # Atualiza peers antes de enviar mensagem
+            peers_atualizados = obter_peers(tracker_sock)
+            enviar_mensagem_grupo(tracker_sock, peers_atualizados, user, private_key, public_key, nome_sala, mensagem)
         elif opcao == "2":
             print("Membros da sala:", membros)
         elif opcao == "3":
@@ -318,17 +425,5 @@ def menu_sala(tracker_sock, peers, user, private_key, public_key, nome_sala):
         else:
             print("Opção inválida!")
 
-def expulsar_membro(tracker_sock, admin, nome_sala, membro):
-    comando = {"cmd": "KICK_MEMBER", "room": nome_sala, "admin": admin, "member": membro}
-    return enviar_comando_tracker(tracker_sock, comando)
-
-def enviar_heartbeat(tracker_sock, user):
-    while True:
-        try:
-            enviar_comando_tracker(tracker_sock, {"cmd": "HEARTBEAT", "user": user})
-        except Exception as e:
-            print(f"[HEARTBEAT] Erro ao enviar heartbeat: {e}")
-        time.sleep(60)
-
 if __name__ == "__main__":
-    main() 
+    main()
